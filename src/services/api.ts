@@ -8,6 +8,11 @@ export interface AnalyzeImageOptions {
   params: ApiParameters;
 }
 
+export interface AnalyzeImageResult {
+  rawResponse: unknown;
+  normalizedResponse: SnapshotApiResponse;
+}
+
 const MAX_RETRIES = 5;
 const INITIAL_BACKOFF_MS = 2000;
 
@@ -31,11 +36,110 @@ function shouldRetry(status: number | null): boolean {
   return false;
 }
 
+function emptyBox() {
+  return { xmin: 0, ymin: 0, xmax: 0, ymax: 0 };
+}
+
+function normalizeSnapshotResponse(raw: any): SnapshotApiResponse {
+  const rawResults = Array.isArray(raw?.results) ? raw.results : [];
+
+  const results = rawResults.map((item: any) => {
+    const isVehicleModeShape =
+      item &&
+      (item.plate === null || (typeof item.plate === 'object' && item.plate?.box));
+
+    // Default / plate mode shape (already normalized)
+    if (!isVehicleModeShape) {
+      return {
+        ...item,
+        plate: item?.plate || '-No plate-',
+        box: item?.box || emptyBox(),
+        region: item?.region || { code: 'unknown', score: 0 },
+        vehicle: item?.vehicle || { type: 'Unknown', score: 0, box: emptyBox() },
+        score: typeof item?.score === 'number' ? item.score : 0,
+        dscore: typeof item?.dscore === 'number' ? item.dscore : 0,
+        candidates: Array.isArray(item?.candidates) ? item.candidates : [],
+      };
+    }
+
+    // Vehicle mode shape
+    const plateObj = item?.plate;
+    const vehicleObj = item?.vehicle || {};
+
+    const plateCandidates = Array.isArray(plateObj?.props?.plate)
+      ? plateObj.props.plate.map((p: any) => ({
+        plate: p?.value ?? '-No plate-',
+        score: typeof p?.score === 'number' ? p.score : 0,
+      }))
+      : [];
+
+    const bestCandidate = plateCandidates[0];
+
+    const regionCandidate = Array.isArray(plateObj?.props?.region)
+      ? plateObj.props.region[0]
+      : null;
+
+    return {
+      plate: bestCandidate?.plate ?? '-No plate-',
+      score:
+        typeof bestCandidate?.score === 'number'
+          ? bestCandidate.score
+          : typeof plateObj?.score === 'number'
+            ? plateObj.score
+            : 0,
+      dscore: typeof plateObj?.score === 'number' ? plateObj.score : 0,
+      box: plateObj?.box || emptyBox(),
+      candidates: plateCandidates,
+      region: {
+        code: regionCandidate?.value ?? 'unknown',
+        score: typeof regionCandidate?.score === 'number' ? regionCandidate.score : 0,
+      },
+      vehicle: {
+        type: vehicleObj?.type ?? 'Unknown',
+        score: typeof vehicleObj?.score === 'number' ? vehicleObj.score : 0,
+        box: vehicleObj?.box || emptyBox(),
+      },
+      model_make: Array.isArray(vehicleObj?.props?.make_model)
+        ? vehicleObj.props.make_model.map((m: any) => ({
+          make: m?.make ?? 'Unknown',
+          model: m?.model ?? 'Unknown',
+          score: typeof m?.score === 'number' ? m.score : 0,
+        }))
+        : undefined,
+      color: Array.isArray(vehicleObj?.props?.color)
+        ? vehicleObj.props.color.map((c: any) => ({
+          color: c?.value ?? c?.color ?? 'unknown',
+          score: typeof c?.score === 'number' ? c.score : 0,
+        }))
+        : undefined,
+      orientation: Array.isArray(vehicleObj?.props?.orientation)
+        ? vehicleObj.props.orientation.map((o: any) => ({
+          orientation: o?.value ?? o?.orientation ?? 'Unknown',
+          score: typeof o?.score === 'number' ? o.score : 0,
+        }))
+        : undefined,
+      direction: typeof item?.direction === 'number' ? item.direction : undefined,
+      direction_score:
+        typeof item?.direction_score === 'number' ? item.direction_score : undefined,
+    };
+  });
+
+  return {
+    processing_time:
+      typeof raw?.processing_time === 'number' ? raw.processing_time : 0,
+    results,
+    filename: raw?.filename ?? 'unknown',
+    version: typeof raw?.version === 'number' ? raw.version : 1,
+    camera_id: raw?.camera_id ?? null,
+    timestamp: raw?.timestamp ?? new Date().toISOString(),
+  };
+}
+
 /**
  * Send an image to the PlateRecognizer Snapshot API.
  * Supports both File objects and base64 data URLs.
  */
-export async function analyzeImage(options: AnalyzeImageOptions): Promise<SnapshotApiResponse> {
+export async function analyzeImage(options: AnalyzeImageOptions): Promise<AnalyzeImageResult> {
   const { baseUrl, token, imageFile, imageDataUrl, params } = options;
 
   // Build headers once
@@ -104,10 +208,12 @@ export async function analyzeImage(options: AnalyzeImageOptions): Promise<Snapsh
         }
       }
 
+      const REQUEST_TIMEOUT_MS = 10000; // 10 seconds
       const res = await fetch(baseUrl, {
         method: 'POST',
         headers,
         body: formData,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
 
       if (!res.ok) {
@@ -127,16 +233,17 @@ export async function analyzeImage(options: AnalyzeImageOptions): Promise<Snapsh
         throw new Error(`API error ${res.status}: ${errorText}`);
       }
 
-      const json: SnapshotApiResponse = await res.json();
-      return json;
+      const rawJson = await res.json();
+      return {
+        rawResponse: rawJson,
+        normalizedResponse: normalizeSnapshotResponse(rawJson),
+      };
     } catch (error) {
       if (attempt < MAX_RETRIES) {
         const message = error instanceof Error ? error.message : String(error);
         const isLikelyNetworkError =
           message.includes('Failed to fetch') ||
-          message.includes('NetworkError') ||
-          message.includes('ECONN') ||
-          message.includes('timeout');
+          message.includes('NetworkError');
 
         if (isLikelyNetworkError) {
           const backoff = INITIAL_BACKOFF_MS * 2 ** attempt;

@@ -2,10 +2,8 @@ import React from 'react';
 import { Box, Typography, IconButton, Tooltip } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import SaveIcon from '@mui/icons-material/Save';
-import { SnapshotApiResponse } from '../../types/api';
-
 interface JsonViewerProps {
-  response: SnapshotApiResponse | null;
+  response: unknown | null;
   filename?: string;
 }
 

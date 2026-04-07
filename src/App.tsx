@@ -105,7 +105,7 @@ const App: React.FC = () => {
     });
 
     try {
-      const response = await analyzeImage({
+      const apiResult = await analyzeImage({
         baseUrl: connection.baseUrl,
         token: connection.token || undefined,
         imageFile: currentImage.file,
@@ -114,7 +114,12 @@ const App: React.FC = () => {
 
       setImages((prev) => {
         const next = [...prev];
-        next[currentIndex] = { ...next[currentIndex], status: 'complete', response };
+        next[currentIndex] = {
+          ...next[currentIndex],
+          status: 'complete',
+          response: apiResult.normalizedResponse,
+          rawResponse: apiResult.rawResponse,
+        };
         return next;
       });
     } catch (err) {
@@ -146,7 +151,7 @@ const App: React.FC = () => {
       });
 
       try {
-        const response = await analyzeImage({
+        const apiResult = await analyzeImage({
           baseUrl: connection.baseUrl,
           token: connection.token || undefined,
           imageFile: images[i].file,
@@ -155,7 +160,12 @@ const App: React.FC = () => {
 
         setImages((prev) => {
           const next = [...prev];
-          next[i] = { ...next[i], status: 'complete', response };
+          next[i] = {
+            ...next[i],
+            status: 'complete',
+            response: apiResult.normalizedResponse,
+            rawResponse: apiResult.rawResponse,
+          };
           return next;
         });
       } catch (err) {
@@ -172,6 +182,7 @@ const App: React.FC = () => {
   }, [images, connection, params]);
 
   const currentResponse: SnapshotApiResponse | null = currentImage?.response || null;
+  const currentRawResponse = currentImage?.rawResponse ?? null;
   const currentResults = currentResponse?.results || [];
 
   return (
@@ -323,7 +334,7 @@ const App: React.FC = () => {
                 {resultTab === 0 && <ResultsTable results={currentResults} />}
                 {resultTab === 1 && (
                   <JsonViewer
-                    response={currentResponse}
+                    response={currentRawResponse}
                     filename={currentImage?.file.name}
                   />
                 )}

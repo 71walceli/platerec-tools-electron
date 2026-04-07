@@ -128,6 +128,7 @@ export interface ImageItem {
   file: File;
   preview: string;
   status: 'pending' | 'processing' | 'complete' | 'error';
+  rawResponse?: unknown;
   response?: SnapshotApiResponse;
   error?: string;
 }
