@@ -16,6 +16,8 @@ import {
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PlaylistPlayIcon from '@mui/icons-material/PlaylistPlay';
+import SaveIcon from '@mui/icons-material/Save';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
@@ -25,6 +27,7 @@ import BoundingBoxCanvas from './components/BoundingBox/BoundingBoxCanvas';
 import ResultsTable from './components/Results/ResultsTable';
 import JsonViewer from './components/Results/JsonViewer';
 import { analyzeImage } from './services/api';
+import { buildCsvFromImages } from './services/export';
 import {
   ImageItem,
   ApiParameters,
@@ -181,6 +184,29 @@ const App: React.FC = () => {
     setLoading(false);
   }, [images, connection, params]);
 
+  // Export all results to CSV
+  const handleExportCsv = useCallback(async () => {
+    const csvContent = buildCsvFromImages(images);
+    if (!csvContent) {
+      setError('No completed results to export');
+      return;
+    }
+
+    try {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const defaultName = `snapshot-results-${timestamp}.csv`;
+      const savedPath = await window.electronAPI.saveFile(defaultName, csvContent);
+      if (savedPath) {
+        setError(null);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to export CSV';
+      setError(message);
+    }
+  }, [images]);
+
+  // Copy image with bounding boxes to clipboard
+
   const currentResponse: SnapshotApiResponse | null = currentImage?.response || null;
   const currentRawResponse = currentImage?.rawResponse ?? null;
   const currentResults = currentResponse?.results || [];
@@ -195,6 +221,16 @@ const App: React.FC = () => {
             <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 'bold' }}>
               🚗 PlateRecognizer Snapshot API Tester
             </Typography>
+            <Button
+              variant="outlined"
+              startIcon={<SaveIcon />}
+              onClick={handleExportCsv}
+              disabled={images.filter((i) => i.status === 'complete').length === 0}
+              size="small"
+              sx={{ mr: 1 }}
+            >
+              Export CSV
+            </Button>
             {loading && <CircularProgress size={20} sx={{ mr: 1 }} />}
             <Typography variant="caption" color="text.secondary">
               {images.filter((i) => i.status === 'complete').length}/{images.length} processed
