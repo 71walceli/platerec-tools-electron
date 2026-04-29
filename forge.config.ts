@@ -26,6 +26,7 @@ const config: ForgeConfig = {
     new AutoUnpackNativesPlugin({}),
     new WebpackPlugin({
       mainConfig,
+      port: 0,
       renderer: {
         config: rendererConfig,
         entryPoints: [
@@ -41,7 +42,7 @@ const config: ForgeConfig = {
       },
     }),
     // Fuses are used to enable/disable various Electron functionality
-    // at package time, before code signing the application
+    // at package time, before signing the application
     new FusesPlugin({
       version: FuseVersion.V1,
       [FuseV1Options.RunAsNode]: false,

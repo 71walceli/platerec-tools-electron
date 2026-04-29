@@ -1,0 +1,65 @@
+diff --git a/node_modules/@electron-forge/plugin-webpack/dist/WebpackPlugin.js b/node_modules/@electron-forge/plugin-webpack/dist/WebpackPlugin.js
+index bb9c86b..431de35 100644
+--- a/node_modules/@electron-forge/plugin-webpack/dist/WebpackPlugin.js
++++ b/node_modules/@electron-forge/plugin-webpack/dist/WebpackPlugin.js
+@@ -36,8 +36,8 @@ class WebpackPlugin extends plugin_base_1.PluginBase {
+         this.port = DEFAULT_PORT;
+         this.loggerPort = DEFAULT_LOGGER_PORT;
+         this.isValidPort = (port) => {
+-            if (port < 1024) {
+-                throw new Error(`Cannot specify port (${port}) below 1024, as they are privileged`);
++            if (port < 0) {
++                throw new Error(`Cannot specify negative port (${port})`);
+             }
+             else if (port > 65535) {
+                 throw new Error(`Port specified (${port}) is not a valid TCP port.`);
+@@ -233,10 +233,17 @@ the generated files). Instead, it is ${JSON.stringify(pj.main)}`);
+             const webpackDevServer = new webpack_dev_server_1.default(this.devServerOptions(), compiler);
+             await webpackDevServer.start();
+             this.servers.push(webpackDevServer.server);
++            // Update port with actual assigned port (when port was 0 for auto-assign)
++            const address = webpackDevServer.server.address();
++            if (address && typeof address === 'object' && address.port) {
++                this.port = address.port;
++                this._configGenerator = undefined;
++                d('Dev server started on actual port:', this.port);
++            }
+             await Promise.all(promises);
+         };
+         this.alreadyStarted = false;
+-        if (c.port) {
++        if (c.port !== undefined) {
+             if (this.isValidPort(c.port)) {
+                 this.port = c.port;
+             }
+@@ -275,22 +282,22 @@ the generated files). Instead, it is ${JSON.stringify(pj.main)}`);
+                     await logger.start();
+                     return task?.newListr([
+                         {
+-                            title: 'Compiling main process code',
+-                            task: async () => {
+-                                await this.compileMain(true, logger);
++                            title: 'Launching dev servers for renderer process code',
++                            task: async (_, task) => {
++                                await this.launchRendererDevServers(logger);
++                                task.output = `Output Available: ${chalk_1.default.cyan(`http://localhost:${this.loggerPort}`)}\n`;
+                             },
+                             rendererOptions: {
++                                persistentOutput: true,
+                                 timer: { ...listr2_1.PRESET_TIMER },
+                             },
+                         },
+                         {
+-                            title: 'Launching dev servers for renderer process code',
+-                            task: async (_, task) => {
+-                                await this.launchRendererDevServers(logger);
+-                                task.output = `Output Available: ${chalk_1.default.cyan(`http://localhost:${this.loggerPort}`)}\n`;
++                            title: 'Compiling main process code',
++                            task: async () => {
++                                await this.compileMain(true, logger);
+                             },
+                             rendererOptions: {
+-                                persistentOutput: true,
+                                 timer: { ...listr2_1.PRESET_TIMER },
+                             },
+                         },
