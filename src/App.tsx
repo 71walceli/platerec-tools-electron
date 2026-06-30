@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   Box,
   AppBar,
@@ -23,7 +23,8 @@ import CssBaseline from '@mui/material/CssBaseline';
 
 import ParametersForm from './components/Config/ParametersForm';
 import ImageUploader from './components/Image/ImageUploader';
-import BoundingBoxCanvas from './components/BoundingBox/BoundingBoxCanvas';
+import BoundingBoxCanvas, { BoundingBoxCanvasRef } from './components/BoundingBox/BoundingBoxCanvas';
+import ImageLightbox from './components/Image/ImageLightbox';
 import ResultsTable from './components/Results/ResultsTable';
 import JsonViewer from './components/Results/JsonViewer';
 import { analyzeImage } from './services/api';
@@ -66,6 +67,8 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [resultTab, setResultTab] = useState(0);
   const [showVehicleBoxes, setShowVehicleBoxes] = useState(true);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const boundingBoxRef = useRef<BoundingBoxCanvasRef>(null);
 
   const currentImage = images[currentIndex] || null;
 
@@ -206,6 +209,32 @@ const App: React.FC = () => {
   }, [images]);
 
   // Copy image with bounding boxes to clipboard
+  const handleCopyToClipboard = useCallback(async () => {
+    const canvas = boundingBoxRef.current?.getCanvas();
+    if (!canvas) {
+      setError('No image to copy');
+      return;
+    }
+
+    try {
+      // Convert canvas to blob
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((b) => {
+          if (b) resolve(b);
+          else reject(new Error('Failed to create blob'));
+        }, 'image/png');
+      });
+
+      // Write to clipboard
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': blob })
+      ]);
+      setError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to copy image to clipboard';
+      setError(message);
+    }
+  }, []);
 
   const currentResponse: SnapshotApiResponse | null = currentImage?.response || null;
   const currentRawResponse = currentImage?.rawResponse ?? null;
@@ -329,13 +358,25 @@ const App: React.FC = () => {
                   }
                   label={<Typography variant="caption">Vehicle boxes</Typography>}
                 />
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<ContentCopyIcon />}
+                  onClick={handleCopyToClipboard}
+                  disabled={!currentImage}
+                  sx={{ ml: 1 }}
+                >
+                  Copy Image
+                </Button>
               </Box>
 
               {currentImage ? (
                 <BoundingBoxCanvas
+                  ref={boundingBoxRef}
                   imageSrc={currentImage.preview}
                   results={currentResults}
                   showVehicleBoxes={showVehicleBoxes}
+                  onImageClick={() => setLightboxOpen(true)}
                 />
               ) : (
                 <Box
@@ -377,6 +418,14 @@ const App: React.FC = () => {
               </Box>
             </Paper>
           </Box>
+
+          <ImageLightbox
+            open={lightboxOpen}
+            imageSrc={currentImage?.preview || ''}
+            results={currentResults}
+            showVehicleBoxes={showVehicleBoxes}
+            onClose={() => setLightboxOpen(false)}
+          />
         </Box>
       </Box>
     </ThemeProvider>

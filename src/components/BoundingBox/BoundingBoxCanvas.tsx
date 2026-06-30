@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { PlateResult, BoundingBox } from '../../types/api';
 
 interface BoundingBoxCanvasProps {
@@ -7,14 +7,18 @@ interface BoundingBoxCanvasProps {
   showVehicleBoxes?: boolean;
   width?: number;
   height?: number;
+  onImageClick?: () => void;
 }
 
-/** Color based on confidence score */
+export interface BoundingBoxCanvasRef {
+  getCanvas: () => HTMLCanvasElement | null;
+}
+
 function getConfidenceColor(score: number): string {
-  if (score >= 0.9) return '#4caf50'; // green
-  if (score >= 0.7) return '#ff9800'; // orange
-  if (score >= 0.5) return '#ff5722'; // deep orange
-  return '#f44336'; // red
+  if (score >= 0.9) return '#4caf50';
+  if (score >= 0.7) return '#ff9800';
+  if (score >= 0.5) return '#ff5722';
+  return '#f44336';
 }
 
 function drawBox(
@@ -40,7 +44,6 @@ function drawBox(
   ctx.strokeRect(x, y, w, h);
   ctx.restore();
 
-  // Label background
   if (label) {
     ctx.save();
     ctx.font = 'bold 13px monospace';
@@ -57,14 +60,19 @@ function drawBox(
   }
 }
 
-const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
+const BoundingBoxCanvas = forwardRef<BoundingBoxCanvasRef, BoundingBoxCanvasProps>(({
   imageSrc,
   results,
   showVehicleBoxes = true,
-}) => {
+  onImageClick,
+}, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    getCanvas: () => canvasRef.current,
+  }));
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -82,13 +90,13 @@ const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Draw image
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
     ctx.drawImage(img, 0, 0, containerWidth, displayHeight);
 
     const scaleX = containerWidth / img.naturalWidth;
     const scaleY = displayHeight / img.naturalHeight;
 
-    // Draw vehicle boxes first (behind plate boxes)
     if (showVehicleBoxes) {
       results.forEach((result) => {
         if (
@@ -102,7 +110,6 @@ const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
       });
     }
 
-    // Draw plate boxes
     results.forEach((result) => {
       const color = getConfidenceColor(result.score);
       const label = `${result.plate.toUpperCase()} ${(result.score * 100).toFixed(0)}%`;
@@ -121,7 +128,6 @@ const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
     img.src = imageSrc;
   }, [imageSrc, draw]);
 
-  // Redraw on window resize
   useEffect(() => {
     const handleResize = () => draw();
     window.addEventListener('resize', handleResize);
@@ -131,14 +137,43 @@ const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
   return (
     <div
       ref={containerRef}
-      style={{ width: '100%', position: 'relative', overflow: 'hidden' }}
+      style={{
+        width: '100%',
+        position: 'relative',
+        overflow: 'hidden',
+        cursor: 'zoom-in',
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onImageClick?.();
+      }}
     >
       <canvas
         ref={canvasRef}
-        style={{ display: 'block', width: '100%' }}
+        style={{
+          display: 'block',
+          width: '100%',
+        }}
       />
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 8,
+          right: 8,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          color: '#fff',
+          padding: '4px 8px',
+          borderRadius: 4,
+          fontSize: '0.75rem',
+          pointerEvents: 'none',
+        }}
+      >
+        Click for fullscreen
+      </div>
     </div>
   );
-};
+});
+
+BoundingBoxCanvas.displayName = 'BoundingBoxCanvas';
 
 export default BoundingBoxCanvas;
