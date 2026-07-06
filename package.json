@@ -1,7 +1,7 @@
 {
   "name": "snapshot-api-tester",
   "productName": "snapshot-api-tester",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "My Electron application description",
   "main": ".webpack/main",
   "private": true,

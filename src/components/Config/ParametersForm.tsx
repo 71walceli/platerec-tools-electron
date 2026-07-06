@@ -88,7 +88,7 @@ const ParametersForm: React.FC<ParametersFormProps> = ({
         onChange={(e) => {
           const val = e.target.value;
           const regions = val
-            ? val.split(',').map((r) => r.trim()).filter(Boolean)
+            ? val.split(',').map((r) => r.trim())
             : undefined;
           onParamsChange({ ...params, regions });
         }}
@@ -276,6 +276,46 @@ const ParametersForm: React.FC<ParametersFormProps> = ({
           error={
             config.threshold_o !== undefined &&
             (config.threshold_o < 0 || config.threshold_o > 1)
+          }
+        />
+      </Box>
+
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          label="Plates per Vehicle"
+          value={config.plates_per_vehicle ?? ''}
+          onChange={(e) => {
+            const val = e.target.value;
+            updateConfig({
+              plates_per_vehicle: val ? parseInt(val, 10) : undefined,
+            });
+          }}
+          size="small"
+          type="number"
+          inputProps={{ min: 1, max: 10, step: 1 }}
+          sx={{ flex: 1 }}
+          helperText="E.g. 3"
+          error={
+            (config.plates_per_vehicle < 1 || config.plates_per_vehicle > 10)
+          }
+        />
+        
+        <TextField
+          label="Zoom In Vehicles"
+          value={config.zoom_in_vehicles ?? ''}
+          onChange={(e) => {
+            const val = e.target.value;
+            updateConfig({
+              zoom_in_vehicles: val ? parseInt(val, 10) : undefined,
+            });
+          }}
+          size="small"
+          type="number"
+          inputProps={{ min: 1, max: 10, step: 1 }}
+          sx={{ flex: 1 }}
+          helperText="E.g. 3"
+          error={
+            (config.plates_per_vehicle < 1 || config.plates_per_vehicle > 10)
           }
         />
       </Box>
