@@ -36,8 +36,6 @@ const CSV_HEADERS = [
   'direction_score',
 ] as const;
 
-type CsvColumn = (typeof CSV_HEADERS)[number];
-
 function escapeCsvValue(value: unknown): string {
   if (value === undefined || value === null) return '';
   const str = typeof value === 'object' ? JSON.stringify(value) : String(value);

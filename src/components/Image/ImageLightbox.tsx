@@ -7,6 +7,8 @@ interface ImageLightboxProps {
   showVehicleBoxes: boolean;
   open: boolean;
   onClose: () => void;
+  onPrevious: () => void;
+  onNext: () => void;
 }
 
 interface ZoomPanState {
@@ -26,17 +28,13 @@ function drawBoxes(
   ctx: CanvasRenderingContext2D,
   results: PlateResult[],
   showVehicleBoxes: boolean,
-  imgWidth: number,
-  imgHeight: number,
-  viewWidth: number,
-  viewHeight: number,
+  imageScale: number,
+  imageOffsetX: number,
+  imageOffsetY: number,
   zoom: number,
   panX: number,
   panY: number
 ) {
-  const scaleX = viewWidth / imgWidth;
-  const scaleY = viewHeight / imgHeight;
-
   ctx.save();
   ctx.translate(panX, panY);
   ctx.scale(zoom, zoom);
@@ -56,7 +54,7 @@ function drawBoxes(
         ctx.strokeStyle = color;
         ctx.lineWidth = 2 / zoom;
         ctx.setLineDash([6 / zoom, 3 / zoom]);
-        ctx.strokeRect(box.xmin * scaleX, box.ymin * scaleY, (box.xmax - box.xmin) * scaleX, (box.ymax - box.ymin) * scaleY);
+        ctx.strokeRect(imageOffsetX + box.xmin * imageScale, imageOffsetY + box.ymin * imageScale, (box.xmax - box.xmin) * imageScale, (box.ymax - box.ymin) * imageScale);
         ctx.restore();
 
         const labelText = label;
@@ -67,9 +65,9 @@ function drawBoxes(
         const labelW = metrics.width + 8 / zoom;
 
         ctx.fillStyle = color;
-        ctx.fillRect(box.xmin * scaleX, box.ymin * scaleY - labelH, labelW, labelH);
+        ctx.fillRect(imageOffsetX + box.xmin * imageScale, imageOffsetY + box.ymin * imageScale - labelH, labelW, labelH);
         ctx.fillStyle = '#fff';
-        ctx.fillText(labelText, box.xmin * scaleX + 4 / zoom, box.ymin * scaleY - 4 / zoom);
+        ctx.fillText(labelText, imageOffsetX + box.xmin * imageScale + 4 / zoom, imageOffsetY + box.ymin * imageScale - 4 / zoom);
       }
     });
   }
@@ -82,7 +80,7 @@ function drawBoxes(
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = 2 / zoom;
-    ctx.strokeRect(box.xmin * scaleX, box.ymin * scaleY, (box.xmax - box.xmin) * scaleX, (box.ymax - box.ymin) * scaleY);
+    ctx.strokeRect(imageOffsetX + box.xmin * imageScale, imageOffsetY + box.ymin * imageScale, (box.xmax - box.xmin) * imageScale, (box.ymax - box.ymin) * imageScale);
     ctx.restore();
 
     const labelText = label;
@@ -93,9 +91,9 @@ function drawBoxes(
     const labelW = metrics.width + 8 / zoom;
 
     ctx.fillStyle = color;
-    ctx.fillRect(box.xmin * scaleX, box.ymin * scaleY - labelH, labelW, labelH);
+    ctx.fillRect(imageOffsetX + box.xmin * imageScale, imageOffsetY + box.ymin * imageScale - labelH, labelW, labelH);
     ctx.fillStyle = '#fff';
-    ctx.fillText(labelText, box.xmin * scaleX + 4 / zoom, box.ymin * scaleY - 4 / zoom);
+    ctx.fillText(labelText, imageOffsetX + box.xmin * imageScale + 4 / zoom, imageOffsetY + box.ymin * imageScale - 4 / zoom);
   });
 
   ctx.restore();
@@ -107,6 +105,8 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
   showVehicleBoxes,
   open,
   onClose,
+  onPrevious,
+  onNext,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -123,14 +123,7 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
   }, [open]);
 
   useEffect(() => {
-    if (!imageSrc) return;
-
-    const img = new Image();
-    img.onload = () => {
-      imageRef.current = img;
-      setImageDimensions({ width: img.naturalWidth, height: img.naturalHeight });
-    };
-    img.src = imageSrc;
+    setZoomPan({ zoom: 1, panX: 0, panY: 0 });
   }, [imageSrc]);
 
   const draw = useCallback(() => {
@@ -151,40 +144,58 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    const imageScale = Math.min(containerWidth / img.naturalWidth, containerHeight / img.naturalHeight);
+    const imageWidth = img.naturalWidth * imageScale;
+    const imageHeight = img.naturalHeight * imageScale;
+    const imageOffsetX = (containerWidth - imageWidth) / 2;
+    const imageOffsetY = (containerHeight - imageHeight) / 2;
     const { zoom, panX, panY } = zoomPan;
-    const scaledWidth = containerWidth * zoom;
-    const scaledHeight = containerHeight * zoom;
-    const offsetX = panX;
-    const offsetY = panY;
 
     ctx.save();
-    ctx.translate(offsetX, offsetY);
-    ctx.drawImage(img, 0, 0, scaledWidth, scaledHeight);
+    ctx.translate(panX, panY);
+    ctx.scale(zoom, zoom);
+    ctx.drawImage(img, imageOffsetX, imageOffsetY, imageWidth, imageHeight);
     ctx.restore();
 
     drawBoxes(
       ctx,
       results,
       showVehicleBoxes,
-      img.naturalWidth,
-      img.naturalHeight,
-      containerWidth,
-      containerHeight,
+      imageScale,
+      imageOffsetX,
+      imageOffsetY,
       zoom,
-      offsetX,
-      offsetY
+      panX,
+      panY
     );
   }, [zoomPan, results, showVehicleBoxes]);
 
   useEffect(() => {
-    draw();
-  }, [draw]);
+    if (!imageSrc) return;
+
+    const img = new Image();
+    img.onload = () => {
+      imageRef.current = img;
+      setImageDimensions({ width: img.naturalWidth, height: img.naturalHeight });
+      draw();
+    };
+    img.src = imageSrc;
+  }, [imageSrc]);
 
   useEffect(() => {
-    const handleResize = () => draw();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [draw]);
+    if (open) draw();
+  }, [open, draw]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver(draw);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [open, draw]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
@@ -234,9 +245,54 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') {
+      e.preventDefault();
       onClose();
+      return;
     }
-  }, [onClose]);
+
+    if (e.ctrlKey) {
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        setZoomPan((previous) => ({
+          ...previous,
+          zoom: Math.min(previous.zoom * 1.1, 20),
+        }));
+      } else if (e.key === '-') {
+        e.preventDefault();
+        setZoomPan((previous) => {
+          const zoom = Math.max(previous.zoom * 0.9, 1);
+          return zoom === 1 ? { zoom: 1, panX: 0, panY: 0 } : { ...previous, zoom };
+        });
+      }
+      return;
+    }
+
+    const panAmount = 60;
+    if (zoomPan.zoom > 1) {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setZoomPan((previous) => ({ ...previous, panX: previous.panX + panAmount }));
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setZoomPan((previous) => ({ ...previous, panX: previous.panX - panAmount }));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setZoomPan((previous) => ({ ...previous, panY: previous.panY + panAmount }));
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setZoomPan((previous) => ({ ...previous, panY: previous.panY - panAmount }));
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      onPrevious();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      onNext();
+    }
+  }, [onClose, onNext, onPrevious, zoomPan.zoom]);
 
   useEffect(() => {
     if (open) {
@@ -332,7 +388,7 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
             pointerEvents: 'none',
           }}
         >
-          {Math.round(zoomPan.zoom * 100)}% - Drag to pan
+          {Math.round(zoomPan.zoom * 100)}% - Drag or use arrows to pan
         </div>
       )}
       {zoomPan.zoom === 1 && imageDimensions.width > 0 && (
@@ -349,7 +405,7 @@ const ImageLightbox: React.FC<ImageLightboxProps> = ({
             pointerEvents: 'none',
           }}
         >
-          Scroll to zoom | {imageDimensions.width}×{imageDimensions.height}
+          Scroll or Ctrl+/- to zoom | Arrows to navigate | {imageDimensions.width}×{imageDimensions.height}
         </div>
       )}
     </div>

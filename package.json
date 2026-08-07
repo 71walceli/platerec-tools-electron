@@ -1,8 +1,8 @@
 {
   "name": "snapshot-api-tester",
   "productName": "snapshot-api-tester",
-  "version": "1.1.1",
-  "description": "My Electron application description",
+  "version": "1.2.0",
+  "description": "Plate Recognizer's Snapshot Cloud & SDK API testing tool.",
   "main": ".webpack/main",
   "private": true,
   "scripts": {

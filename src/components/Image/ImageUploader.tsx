@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { forwardRef, useCallback, useImperativeHandle } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Box, Typography, List, ListItem, ListItemText, IconButton, Chip } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -13,6 +13,10 @@ interface ImageUploaderProps {
   onSelectImage: (index: number) => void;
 }
 
+export interface ImageUploaderRef {
+  openFileDialog: () => void;
+}
+
 const statusColors: Record<ImageItem['status'], 'default' | 'primary' | 'success' | 'error'> = {
   pending: 'default',
   processing: 'primary',
@@ -20,13 +24,13 @@ const statusColors: Record<ImageItem['status'], 'default' | 'primary' | 'success
   error: 'error',
 };
 
-const ImageUploader: React.FC<ImageUploaderProps> = ({
+const ImageUploader = forwardRef<ImageUploaderRef, ImageUploaderProps>(({
   images,
   currentIndex,
   onAddImages,
   onRemoveImage,
   onSelectImage,
-}) => {
+}, ref) => {
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
       onAddImages(acceptedFiles);
@@ -34,13 +38,15 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({
     [onAddImages]
   );
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,
     accept: {
       'image/*': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'],
     },
     multiple: true,
   });
+
+  useImperativeHandle(ref, () => ({ openFileDialog: open }), [open]);
 
   return (
     <Box>
@@ -112,6 +118,6 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({
       )}
     </Box>
   );
-};
+});
 
 export default ImageUploader;

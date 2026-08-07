@@ -1,4 +1,12 @@
-import { ApiParameters, EngineConfig, SnapshotApiResponse } from '../types/api';
+import {
+  ApiParameters,
+  BoundingBox,
+  EngineConfig,
+  OrientationEntry,
+  PlateCandidate,
+  SnapshotApiResponse,
+  VehicleType,
+} from '../types/api';
 
 export interface AnalyzeImageOptions {
   baseUrl: string;
@@ -36,102 +44,185 @@ function shouldRetry(status: number | null): boolean {
   return false;
 }
 
-function emptyBox() {
-  return { xmin: 0, ymin: 0, xmax: 0, ymax: 0 };
+/**
+ * Return a filename safe for clients and servers that only support ASCII.
+ * Keep the original File untouched because it is also used by the UI/export flow.
+ */
+export function normalizeFilenameForUpload(filename: string): string {
+  const asciiFilename = filename
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E]/gu, '_');
+
+  return asciiFilename || 'upload';
 }
 
-function normalizeSnapshotResponse(raw: any): SnapshotApiResponse {
-  const rawResults = Array.isArray(raw?.results) ? raw.results : [];
+type ApiRecord = Record<string, unknown>;
 
-  const results = rawResults.map((item: any) => {
+function asRecord(value: unknown): ApiRecord {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as ApiRecord
+    : {};
+}
+
+function numberValue(value: unknown, fallback = 0): number {
+  return typeof value === 'number' ? value : fallback;
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function normalizeBox(value: unknown): BoundingBox {
+  const box = asRecord(value);
+  return {
+    xmin: numberValue(box.xmin),
+    ymin: numberValue(box.ymin),
+    xmax: numberValue(box.xmax),
+    ymax: numberValue(box.ymax),
+  };
+}
+
+function normalizeCandidates(value: unknown): PlateCandidate[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.map((rawCandidate) => {
+    const candidate = asRecord(rawCandidate);
+    return {
+      plate: stringValue(candidate.plate, '-No plate-'),
+      score: numberValue(candidate.score),
+    };
+  });
+}
+
+function normalizeVehicleType(value: unknown): VehicleType {
+  const vehicleTypes: VehicleType[] = [
+    'Big Truck', 'Bus', 'Motorcycle', 'Pickup Truck', 'Sedan', 'SUV', 'Van', 'Unknown',
+  ];
+  return typeof value === 'string' && vehicleTypes.includes(value as VehicleType)
+    ? value as VehicleType
+    : 'Unknown';
+}
+
+function normalizeOrientation(value: unknown): OrientationEntry['orientation'] {
+  return value === 'Front' || value === 'Rear' || value === 'Unknown' ? value : 'Unknown';
+}
+
+function normalizeSnapshotResponse(raw: unknown): SnapshotApiResponse {
+  const response = asRecord(raw);
+  const rawResults = Array.isArray(response.results) ? response.results : [];
+
+  const results = rawResults.map((rawItem) => {
+    const item = asRecord(rawItem);
+    const plate = item.plate;
     const isVehicleModeShape =
-      item &&
-      (item.plate === null || (typeof item.plate === 'object' && item.plate?.box));
+      plate === null || (asRecord(plate).box !== undefined);
 
     // Default / plate mode shape (already normalized)
     if (!isVehicleModeShape) {
+      const vehicle = asRecord(item.vehicle);
       return {
-        ...item,
-        plate: item?.plate || '-No plate-',
-        box: item?.box || emptyBox(),
-        region: item?.region || { code: 'unknown', score: 0 },
-        vehicle: item?.vehicle || { type: 'Unknown', score: 0, box: emptyBox() },
-        score: typeof item?.score === 'number' ? item.score : 0,
-        dscore: typeof item?.dscore === 'number' ? item.dscore : 0,
-        candidates: Array.isArray(item?.candidates) ? item.candidates : [],
+        plate: stringValue(plate, '-No plate-'),
+        box: normalizeBox(item.box),
+        region: {
+          code: stringValue(asRecord(item.region).code, 'unknown'),
+          score: numberValue(asRecord(item.region).score),
+        },
+        vehicle: {
+          type: normalizeVehicleType(vehicle.type),
+          score: numberValue(vehicle.score),
+          box: normalizeBox(vehicle.box),
+        },
+        score: numberValue(item.score),
+        dscore: numberValue(item.dscore),
+        candidates: normalizeCandidates(item.candidates),
       };
     }
 
     // Vehicle mode shape
-    const plateObj = item?.plate;
-    const vehicleObj = item?.vehicle || {};
+    const plateObj = asRecord(plate);
+    const vehicleObj = asRecord(item.vehicle);
+    const plateProps = asRecord(plateObj.props);
+    const vehicleProps = asRecord(vehicleObj.props);
 
-    const plateCandidates = Array.isArray(plateObj?.props?.plate)
-      ? plateObj.props.plate.map((p: any) => ({
-        plate: p?.value ?? '-No plate-',
-        score: typeof p?.score === 'number' ? p.score : 0,
-      }))
+    const plateCandidates = Array.isArray(plateProps.plate)
+      ? plateProps.plate.map((rawCandidate) => {
+        const candidate = asRecord(rawCandidate);
+        return {
+          plate: stringValue(candidate.value, '-No plate-'),
+          score: numberValue(candidate.score),
+        };
+      })
       : [];
 
     const bestCandidate = plateCandidates[0];
 
-    const regionCandidate = Array.isArray(plateObj?.props?.region)
-      ? plateObj.props.region[0]
-      : null;
+    const regionCandidate = Array.isArray(plateProps.region)
+      ? asRecord(plateProps.region[0])
+      : {};
 
     return {
       plate: bestCandidate?.plate ?? '-No plate-',
       score:
         typeof bestCandidate?.score === 'number'
           ? bestCandidate.score
-          : typeof plateObj?.score === 'number'
+          : typeof plateObj.score === 'number'
             ? plateObj.score
             : 0,
-      dscore: typeof plateObj?.score === 'number' ? plateObj.score : 0,
-      box: plateObj?.box || emptyBox(),
+      dscore: numberValue(plateObj.score),
+      box: normalizeBox(plateObj.box),
       candidates: plateCandidates,
       region: {
-        code: regionCandidate?.value ?? 'unknown',
-        score: typeof regionCandidate?.score === 'number' ? regionCandidate.score : 0,
+        code: stringValue(regionCandidate.value, 'unknown'),
+        score: numberValue(regionCandidate.score),
       },
       vehicle: {
-        type: vehicleObj?.type ?? 'Unknown',
-        score: typeof vehicleObj?.score === 'number' ? vehicleObj.score : 0,
-        box: vehicleObj?.box || emptyBox(),
+        type: normalizeVehicleType(vehicleObj.type),
+        score: numberValue(vehicleObj.score),
+        box: normalizeBox(vehicleObj.box),
       },
-      model_make: Array.isArray(vehicleObj?.props?.make_model)
-        ? vehicleObj.props.make_model.map((m: any) => ({
-          make: m?.make ?? 'Unknown',
-          model: m?.model ?? 'Unknown',
-          score: typeof m?.score === 'number' ? m.score : 0,
-        }))
+      model_make: Array.isArray(vehicleProps.make_model)
+        ? vehicleProps.make_model.map((rawModel) => {
+          const model = asRecord(rawModel);
+          return {
+            make: stringValue(model.make, 'Unknown'),
+            model: stringValue(model.model, 'Unknown'),
+            score: numberValue(model.score),
+          };
+        })
         : undefined,
-      color: Array.isArray(vehicleObj?.props?.color)
-        ? vehicleObj.props.color.map((c: any) => ({
-          color: c?.value ?? c?.color ?? 'unknown',
-          score: typeof c?.score === 'number' ? c.score : 0,
-        }))
+      color: Array.isArray(vehicleProps.color)
+        ? vehicleProps.color.map((rawColor) => {
+          const color = asRecord(rawColor);
+          return {
+            color: stringValue(color.value, stringValue(color.color, 'unknown')),
+            score: numberValue(color.score),
+          };
+        })
         : undefined,
-      orientation: Array.isArray(vehicleObj?.props?.orientation)
-        ? vehicleObj.props.orientation.map((o: any) => ({
-          orientation: o?.value ?? o?.orientation ?? 'Unknown',
-          score: typeof o?.score === 'number' ? o.score : 0,
-        }))
+      orientation: Array.isArray(vehicleProps.orientation)
+        ? vehicleProps.orientation.map((rawOrientation) => {
+          const orientation = asRecord(rawOrientation);
+          return {
+            orientation: normalizeOrientation(orientation.value ?? orientation.orientation),
+            score: numberValue(orientation.score),
+          };
+        })
         : undefined,
-      direction: typeof item?.direction === 'number' ? item.direction : undefined,
+      direction: typeof item.direction === 'number' ? item.direction : undefined,
       direction_score:
-        typeof item?.direction_score === 'number' ? item.direction_score : undefined,
+        typeof item.direction_score === 'number' ? item.direction_score : undefined,
     };
   });
 
   return {
     processing_time:
-      typeof raw?.processing_time === 'number' ? raw.processing_time : 0,
+      numberValue(response.processing_time),
     results,
-    filename: raw?.filename ?? 'unknown',
-    version: typeof raw?.version === 'number' ? raw.version : 1,
-    camera_id: raw?.camera_id ?? null,
-    timestamp: raw?.timestamp ?? new Date().toISOString(),
+    filename: stringValue(response.filename, 'unknown'),
+    version: numberValue(response.version, 1),
+    camera_id: typeof response.camera_id === 'string' ? response.camera_id : null,
+    timestamp: stringValue(response.timestamp, new Date().toISOString()),
   };
 }
 
@@ -156,7 +247,7 @@ export async function analyzeImage(options: AnalyzeImageOptions): Promise<Analyz
 
       // Add image
       if (imageFile) {
-        formData.append('upload', imageFile);
+        formData.append('upload', imageFile, normalizeFilenameForUpload(imageFile.name));
       } else if (imageDataUrl) {
         // Convert data URL to blob
         const response = await fetch(imageDataUrl);

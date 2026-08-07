@@ -11,7 +11,6 @@ import {
   Divider,
   Box,
   Tooltip,
-  IconButton,
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { ApiParameters, EngineConfig, ConnectionConfig } from '../../types/api';
@@ -280,6 +279,24 @@ const ParametersForm: React.FC<ParametersFormProps> = ({
         />
       </Box>
 
+      <TextField
+        label="Text Formats"
+        value={(config.text_formats || []).join('\n')}
+        onChange={(e) => {
+          const textFormats = e.target.value
+            .split('\n')
+            .map((format) => format.trim())
+            .filter(Boolean);
+          updateConfig({ text_formats: textFormats.length > 0 ? textFormats : undefined });
+        }}
+        size="small"
+        fullWidth
+        multiline
+        minRows={2}
+        placeholder="[0-9][0-9][0-9][a-z][a-z]"
+        helperText="One regular expression per line"
+      />
+
       <Box sx={{ display: 'flex', gap: 1 }}>
         <TextField
           label="Plates per Vehicle"
@@ -296,6 +313,7 @@ const ParametersForm: React.FC<ParametersFormProps> = ({
           sx={{ flex: 1 }}
           helperText="E.g. 3"
           error={
+            config.plates_per_vehicle !== undefined &&
             (config.plates_per_vehicle < 1 || config.plates_per_vehicle > 10)
           }
         />
@@ -315,7 +333,8 @@ const ParametersForm: React.FC<ParametersFormProps> = ({
           sx={{ flex: 1 }}
           helperText="E.g. 3"
           error={
-            (config.plates_per_vehicle < 1 || config.plates_per_vehicle > 10)
+            config.zoom_in_vehicles !== undefined &&
+            (config.zoom_in_vehicles < 1 || config.zoom_in_vehicles > 10)
           }
         />
       </Box>

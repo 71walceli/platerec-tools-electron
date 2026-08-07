@@ -1,28 +1,33 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Box,
   AppBar,
   Toolbar,
   Typography,
   Button,
+  ButtonGroup,
   CircularProgress,
   Alert,
+  Menu,
+  MenuItem,
   Tabs,
   Tab,
   Paper,
   Divider,
   FormControlLabel,
   Checkbox,
+  Snackbar,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PlaylistPlayIcon from '@mui/icons-material/PlaylistPlay';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import SaveIcon from '@mui/icons-material/Save';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
 import ParametersForm from './components/Config/ParametersForm';
-import ImageUploader from './components/Image/ImageUploader';
+import ImageUploader, { ImageUploaderRef } from './components/Image/ImageUploader';
 import BoundingBoxCanvas, { BoundingBoxCanvasRef } from './components/BoundingBox/BoundingBoxCanvas';
 import ImageLightbox from './components/Image/ImageLightbox';
 import ResultsTable from './components/Results/ResultsTable';
@@ -48,6 +53,15 @@ const darkTheme = createTheme({
 
 let imageIdCounter = 0;
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (
+    target.isContentEditable ||
+    target.tagName === 'INPUT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT'
+  );
+}
+
 const App: React.FC = () => {
   // Connection state
   const [connection, setConnection] = useState<ConnectionConfig>({
@@ -68,7 +82,10 @@ const App: React.FC = () => {
   const [resultTab, setResultTab] = useState(0);
   const [showVehicleBoxes, setShowVehicleBoxes] = useState(true);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [analyzeMenuAnchor, setAnalyzeMenuAnchor] = useState<null | HTMLElement>(null);
+  const [navigationMessage, setNavigationMessage] = useState<string | null>(null);
   const boundingBoxRef = useRef<BoundingBoxCanvasRef>(null);
+  const imageUploaderRef = useRef<ImageUploaderRef>(null);
 
   const currentImage = images[currentIndex] || null;
 
@@ -141,13 +158,13 @@ const App: React.FC = () => {
     }
   }, [currentImage, currentIndex, connection, params]);
 
-  // Analyze all pending images
-  const handleAnalyzeAll = useCallback(async () => {
+  // Analyze images, optionally skipping items that already completed successfully.
+  const handleAnalyzeImages = useCallback(async (includeCompleted: boolean) => {
     setLoading(true);
     setError(null);
 
     for (let i = 0; i < images.length; i++) {
-      if (images[i].status === 'complete') continue;
+      if (!includeCompleted && images[i].status === 'complete') continue;
 
       setCurrentIndex(i);
       setImages((prev) => {
@@ -186,6 +203,16 @@ const App: React.FC = () => {
 
     setLoading(false);
   }, [images, connection, params]);
+
+  const handleAnalyzeAll = useCallback(() => {
+    setAnalyzeMenuAnchor(null);
+    void handleAnalyzeImages(true);
+  }, [handleAnalyzeImages]);
+
+  const handleAnalyzeRemaining = useCallback(() => {
+    setAnalyzeMenuAnchor(null);
+    void handleAnalyzeImages(false);
+  }, [handleAnalyzeImages]);
 
   // Export all results to CSV
   const handleExportCsv = useCallback(async () => {
@@ -235,6 +262,74 @@ const App: React.FC = () => {
       setError(message);
     }
   }, []);
+
+  const handleNavigateImage = useCallback((direction: 'previous' | 'next') => {
+    if (images.length === 0) return;
+
+    setCurrentIndex((previous) => {
+      if (direction === 'previous') {
+        if (previous === 0) {
+          setNavigationMessage('Wrapped to last image');
+          return images.length - 1;
+        }
+        return previous - 1;
+      }
+
+      if (previous === images.length - 1) {
+        setNavigationMessage('Wrapped to first image');
+        return 0;
+      }
+      return previous + 1;
+    });
+  }, [images.length]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) return;
+
+      if (event.ctrlKey && event.key === 'ArrowLeft') {
+        event.preventDefault();
+        handleNavigateImage('previous');
+        return;
+      }
+
+      if (event.ctrlKey && event.key === 'ArrowRight') {
+        event.preventDefault();
+        handleNavigateImage('next');
+        return;
+      }
+
+      if (event.ctrlKey && event.key.toLowerCase() === 'o') {
+        event.preventDefault();
+        imageUploaderRef.current?.openFileDialog();
+        return;
+      }
+
+      if (event.ctrlKey && event.key.toLowerCase() === 'v') {
+        event.preventDefault();
+        void handleCopyToClipboard();
+        return;
+      }
+
+      if (event.key.toLowerCase() === 'f') {
+        if (!currentImage) return;
+        event.preventDefault();
+        setLightboxOpen((previous) => !previous);
+        return;
+      }
+
+      if (!lightboxOpen && event.key === 'ArrowLeft') {
+        event.preventDefault();
+        handleNavigateImage('previous');
+      } else if (!lightboxOpen && event.key === 'ArrowRight') {
+        event.preventDefault();
+        handleNavigateImage('next');
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [currentImage, handleCopyToClipboard, handleNavigateImage, lightboxOpen]);
 
   const currentResponse: SnapshotApiResponse | null = currentImage?.response || null;
   const currentRawResponse = currentImage?.rawResponse ?? null;
@@ -298,6 +393,7 @@ const App: React.FC = () => {
             </Typography>
 
             <ImageUploader
+              ref={imageUploaderRef}
               images={images}
               currentIndex={currentIndex}
               onAddImages={handleAddImages}
@@ -316,16 +412,44 @@ const App: React.FC = () => {
               >
                 Analyze Current
               </Button>
-              <Button
+              <ButtonGroup
                 variant="outlined"
-                startIcon={<PlaylistPlayIcon />}
-                onClick={handleAnalyzeAll}
-                disabled={loading || images.length === 0 || !connection.baseUrl}
                 fullWidth
                 size="small"
+                disabled={loading || images.length === 0 || !connection.baseUrl}
               >
-                Analyze All
-              </Button>
+                <Button
+                  startIcon={loading ? <CircularProgress size={16} /> : <PlaylistPlayIcon />}
+                  onClick={handleAnalyzeAll}
+                >
+                  Analyze All
+                </Button>
+                <Button
+                  aria-label="More analyze options"
+                  aria-controls={analyzeMenuAnchor ? 'analyze-menu' : undefined}
+                  aria-expanded={analyzeMenuAnchor ? 'true' : undefined}
+                  aria-haspopup="menu"
+                  onClick={(event) => setAnalyzeMenuAnchor(event.currentTarget)}
+                  sx={{ flex: '0 0 auto', maxWidth: 36, px: 0.5 }}
+                >
+                  <ArrowDropDownIcon />
+                </Button>
+              </ButtonGroup>
+              <Menu
+                id="analyze-menu"
+                anchorEl={analyzeMenuAnchor}
+                open={Boolean(analyzeMenuAnchor)}
+                onClose={() => setAnalyzeMenuAnchor(null)}
+              >
+                <MenuItem onClick={handleAnalyzeAll}>
+                  <PlaylistPlayIcon fontSize="small" sx={{ mr: 1 }} />
+                  Analyze All
+                </MenuItem>
+                <MenuItem onClick={handleAnalyzeRemaining}>
+                  <PlaylistPlayIcon fontSize="small" sx={{ mr: 1 }} />
+                  Analyze Remaining
+                </MenuItem>
+              </Menu>
             </Box>
           </Paper>
 
@@ -425,7 +549,19 @@ const App: React.FC = () => {
             results={currentResults}
             showVehicleBoxes={showVehicleBoxes}
             onClose={() => setLightboxOpen(false)}
+            onPrevious={() => handleNavigateImage('previous')}
+            onNext={() => handleNavigateImage('next')}
           />
+          <Snackbar
+            open={Boolean(navigationMessage)}
+            autoHideDuration={2500}
+            onClose={() => setNavigationMessage(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+          >
+            <Alert severity="info" variant="filled" onClose={() => setNavigationMessage(null)}>
+              {navigationMessage}
+            </Alert>
+          </Snackbar>
         </Box>
       </Box>
     </ThemeProvider>

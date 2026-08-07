@@ -2,11 +2,11 @@
 
 ## Executive Summary
 
-This document outlines the architecture for an Electron desktop application that serves as a frontend for testing the PlateRecognizer Snapshot API. The application allows users to configure arbitrary API endpoints, upload images (single or multiple), visualize detection results with bounding boxes, and export results in various formats.
+This document records the delivered architecture for an Electron desktop application that serves as a frontend for testing the PlateRecognizer Snapshot API. The application allows users to configure arbitrary API endpoints, upload images (single or multiple), visualize detection results with bounding boxes, and export completed results as CSV.
 
 **Technology Stack:**
 - Electron + Electron Forge (main application framework + build tooling)
-- React 18 (UI library)
+- React 19 (UI library)
 - TypeScript (type safety, strict mode)
 - Webpack (build tool, via Electron Forge TypeScript + Webpack template)
 - Material UI (MUI) (component library)
@@ -182,15 +182,30 @@ When `config={"detection_mode":"vehicle"}`, the response includes vehicles even 
    - Display plate text and confidence scores
    - Handle different image sizes and aspect ratios
 
-4. **Parameter Configuration (Phase 1 subset)**
+4. **Parameter Configuration**
    - `regions` - Country/Region codes (comma-separated)
    - `config.detection_rule` - `"strict"` or empty
    - `config.detection_mode` - `"plate"` (default) or `"vehicle"`
    - `config.threshold_d` - Detection confidence threshold (0-1)
    - `config.threshold_o` - OCR confidence threshold (0-1)
    - `config.mode` - `"fast"` or default
-   - `mmc` - Enable make/model/color (boolean)
-   - `config.region` - `"strict"` or empty
+    - `mmc` - Enable make/model/color (boolean)
+    - `config.region` - `"strict"` or empty
+    - `direction` - Enable direction prediction when MMC is enabled
+    - `config.text_formats` - One regular expression per line
+    - `config.plates_per_vehicle` - Integer from 1 through 10
+    - `config.zoom_in_vehicles` - Integer from 1 through 10
+
+5. **Reliable Request and Response Handling**
+   - Submit multipart image requests with an ASCII-safe upload filename while retaining the original filename in the UI and exports.
+   - Apply a 10-second request timeout.
+   - Retry network failures, HTTP `429`, and HTTP `5xx` responses up to five times with exponential backoff beginning at two seconds. Do not retry other HTTP failures.
+   - Preserve the API payload for the JSON response tab and normalize both plate-mode and vehicle-mode result shapes for the table, overlays, and CSV export.
+
+6. **Result Inspection and Export**
+   - Provide a raw JSON response tab, result table, annotated canvas, fullscreen lightbox with wheel zoom and drag pan, and annotated-image clipboard copy.
+   - Export completed image results as a single CSV file through the Electron save dialog.
+   - ZIP export and raw JSON file export are not in the delivered scope.
 
 ---
 
@@ -200,55 +215,47 @@ When `config={"detection_mode":"vehicle"}`, the response includes vehicles even 
 
 ```mermaid
 graph TB
-    subgraph Main Process
-        IPC[IPC Main Channel]
-        FS[File System Module]
-        EXP[Export Module]
-    end
-
     subgraph Renderer Process
-        UI[Main UI Components]
-        IMG[Image Processing]
-        BB[Canvas Bounding Box]
-        EXP_UI[Export UI]
+        APP[App and UI state]
+        API[Snapshot API client]
+        VIEW[Canvas, table, JSON view, lightbox]
     end
 
-    API[API Client] --> IPC
-    UI --> API
-    IMG --> BB
-    BB --> UI
-    EXP_UI --> IPC
-    IPC --> FS
-    IPC --> EXP
+    subgraph Main Process
+        PRELOAD[Preload context bridge]
+        SAVE[Save-file handler]
+        FS[File system]
+    end
+
+    APP --> API
+    API --> SNAPSHOT[Snapshot endpoint]
+    APP --> VIEW
+    APP --> PRELOAD
+    PRELOAD --> SAVE
+    SAVE --> FS
 ```
 
 ### Component Architecture
 
 ```mermaid
 graph LR
-    subgraph App.tsx
-        Header[Header Component]
-        Sidebar[Sidebar - Config]
-        MainArea[Main Content Area]
-        Footer[Footer - Status]
-    end
-
-    subgraph Sidebar
-        BaseURL[Base URL Input]
-        Params[Parameter Controls]
-        Images[Image Upload]
-    end
-
-    subgraph MainArea
-        ImageViewer[Image Viewer with Bounding Boxes]
-        Results[Results Table]
-        JSON[Raw JSON Display]
-    end
+    App --> ParametersForm
+    App --> ImageUploader
+    App --> BoundingBoxCanvas
+    App --> ImageLightbox
+    App --> ResultsTable
+    App --> JsonViewer
+    App --> ApiService
+    App --> CsvExport
 ```
 
 ---
 
 ## Project Structure
+
+### Historical Intended Layout
+
+The following layout is retained as the original design reference. It is not the current source tree and must not be used to infer implemented modules.
 
 ```
 SnapshotApiTester/
@@ -312,6 +319,27 @@ SnapshotApiTester/
 ├── webpack.renderer.config.ts      # Webpack config for renderer
 ├── webpack.plugins.ts              # Webpack plugins (React Refresh, etc.)
 └── webpack.rules.ts                # Webpack loaders
+```
+
+### Implemented Layout
+
+```
+SnapshotApiTester/
+├── src/
+│   ├── index.ts                    # Electron main-process entry
+│   ├── preload.ts                  # Context bridge and save-file API
+│   ├── index.html                  # Renderer HTML template
+│   ├── renderer.ts                 # React renderer entry
+│   ├── App.tsx                     # Application state and UI composition
+│   ├── components/
+│   │   ├── Config/ParametersForm.tsx
+│   │   ├── Image/{ImageLightbox,ImageUploader}.tsx
+│   │   ├── BoundingBox/BoundingBoxCanvas.tsx
+│   │   └── Results/{JsonViewer,ResultsTable}.tsx
+│   ├── services/{api,export}.ts
+│   └── types/api.ts
+├── forge.config.ts                  # Forge and packaging configuration
+└── package.json
 ```
 
 ---
@@ -545,7 +573,7 @@ interface ImageItem {
 
 ### 5. Export Services
 
-**CSV Export (`src/services/csv.ts`):**
+**CSV Export (`src/services/export.ts`):**
 ```typescript
 interface CsvExport {
     generate(results: ApiResponse[], imageName: string): string;
@@ -553,38 +581,16 @@ interface CsvExport {
 }
 
 const CSV_COLUMNS = [
-    'timestamp',
-    'plate',
-    'score',
-    'dscore',
-    'file',
-    'box',
-    'model_make',
-    'color',
-    'vehicle',
-    'region',
-    'orientation',
-    'candidates',
-    'source_url',
-    'position_sec',
-    'direction'
+    'filename', 'timestamp', 'camera_id', 'processing_time',
+    'box_xmin', 'box_ymin', 'box_xmax', 'box_ymax',
+    'plate', 'region_code', 'region_score', 'score', 'candidates', 'dscore',
+    'vehicle_score', 'vehicle_type',
+    'vehicle_box_xmin', 'vehicle_box_ymin', 'vehicle_box_xmax', 'vehicle_box_ymax',
+    'model_make', 'color', 'orientation', 'direction', 'direction_score'
 ];
 ```
 
-**ZIP Export (`src/services/zip.ts`):**
-```typescript
-interface ZipExport {
-    addFile(path: string, content: string | Blob): void;
-    addDirectory(path: string): void;
-    generate(): Promise<Blob>;
-    download(blob: Blob, filename: string): void;
-}
-
-// ZIP contents:
-// - results.csv (combined CSV of all results)
-// - images/ (copy of uploaded images)
-// - json/ (individual JSON response files per image)
-```
+The exporter includes only completed image items with a normalized response. Nested candidate and vehicle attributes are JSON-encoded and escaped in their CSV cells. Saving is delegated to the preload-exposed Electron `saveFile` API.
 
 ---
 
@@ -616,8 +622,8 @@ sequenceDiagram
     UI->>Renderer: Draw bounding boxes
     Renderer-->>UI: Annotated image
     
-    User->>UI: Click "Export"
-    UI->>Export: Generate CSV/ZIP
+    User->>UI: Click "Export CSV"
+    UI->>Export: Generate combined CSV
     Export-->>User: Download file
 ```
 
@@ -686,16 +692,17 @@ graph TD
     ResultsPanel --> ExportButtons
     
     ExportButtons --> CsvExport
-    ExportButtons --> ZipExport
 ```
 
 ---
 
 ## Implementation Steps
 
+> Historical implementation outline. The delivered baseline and outstanding verification work are tracked in `specs/001-delivered-baseline/`.
+
 ### Step 1: Project Setup
 1. Initialize Electron + React + TypeScript project with Electron Forge (`npx create-electron-app --template=typescript-webpack`)
-2. Install React 18, MUI, and configure React Refresh for HMR
+2. Install React 19, MUI, and configure React Refresh for HMR
 3. Set up secure IPC communication (contextIsolation=true, sandbox=true, nodeIntegration=false)
 4. Configure preload script with type-safe context bridge
 5. Set up global type declarations for `window.electronAPI`
@@ -720,9 +727,8 @@ graph TD
 
 ### Step 5: Export Functionality
 1. Implement CSV generation
-2. Create ZIP export with file structure
-3. Add download handlers
-4. Implement batch export for multiple images
+2. Add Electron save-dialog handling
+3. Implement batch CSV export for completed images
 
 ### Step 6: Polish and Testing
 1. Add loading states and progress indicators
@@ -740,6 +746,7 @@ graph TD
 - **Comparison:** Side-by-side comparison of results
 - **Custom Annotations:** Add manual bounding boxes
 - **Plugin System:** Support for additional export formats
+- **ZIP Export:** Archive CSV, original images, and raw API payloads after a format and retention policy are specified
 - **Remote Configuration:** Load settings from config file
 - **Dark Mode:** UI theme support
 
@@ -749,13 +756,10 @@ graph TD
 
 ### Core Dependencies
 ```
-react react-dom                          # React 18
+react react-dom                          # React 19
 @mui/material @emotion/react @emotion/styled  # Material UI
 @mui/icons-material                      # MUI icons
 react-dropzone                           # Drag-and-drop file upload
-electron-store                           # Persistent settings storage
-archiver                                 # ZIP creation (main process)
-papaparse                                # CSV generation
 ```
 
 ### Development Dependencies
@@ -789,9 +793,12 @@ eslint prettier                          # Code quality
 - [ ] JSON response parsing
 - [ ] Bounding box extraction
 - [ ] Canvas rendering
-- [ ] CSV export matching sample format
-- [ ] ZIP export with proper structure
-- [ ] JSON response saving
+- [ ] CSV export with the documented flat schema
+- [ ] Raw JSON response display
+- [ ] API retry, timeout, and non-retry behavior
+- [ ] Plate-mode and vehicle-mode response normalization
+- [ ] Lightbox zoom/pan and Escape/backdrop close behavior
+- [ ] Clipboard copy of the annotated image
 
 ### UI/UX
 - [ ] Clean, intuitive layout
@@ -799,7 +806,7 @@ eslint prettier                          # Code quality
 - [ ] Real-time validation feedback
 - [ ] Loading states
 - [ ] Error messages
-- [ ] Export status notifications
+- [ ] Export failure feedback
 - [ ] Responsive design
 
 ### Code Quality
@@ -807,7 +814,7 @@ eslint prettier                          # Code quality
 - [ ] Component isolation
 - [ ] Error boundaries
 - [ ] Performance optimization
-- [ ] Security considerations (IPC validation)
+- [ ] Security considerations (preload API validation)
 
 ---
 
